@@ -1,13 +1,6 @@
 #!/usr/bin/env Rscript 
-# this scripts use: singularity shell -B /hpcnfs docker://fgualdr/envrnorm
-# testing on: /hpcnfs/data/GN2/fgualdrini/Data_Projects/SMARCA_JULIA/RNAseq_SQuIPRE/count squire_normdeg
-# opt= list()
-# opt$file = "/hpcnfs/data/GN2/fgualdrini/Data_Projects/SMARCA_JULIA/RNAseq_SQuIPRE/count/"
-# opt$out = "squire_normdeg"
-# opt$processes = 4
-# opt$sample_rm = "/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/SMARCA_JULIA/RNAseq_SQuIPRE/RM_SAMPLES"
-# opt$deg_design = "/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/SMARCA_JULIA/RNAseq_SQuIPRE/DEG_DESIGN"
-# opt$revel_conditions = "WT,UT"
+# this scripts use: docker://fgualdr/envrnorm
+
 
 library(optparse)
 library(dplyr)
