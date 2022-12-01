@@ -25,7 +25,7 @@ if (params.help) {
     exit 0
 }
 
-
+ 
 
 workflow {
 
@@ -41,13 +41,24 @@ workflow {
     if (params.strandedness) { ch_strandedness = params.strandedness } else { ch_strandedness = 0 }
     if (params.em) { ch_em = params.em } else { ch_em = 'auto' }
 
+    if (params.rm_samp) { ch_rm_samp = params.rm_samp } else {ch_rm_samp = 'NULL' }
+    if (params.deg_design) { ch_deg_design = params.deg_design } else { exit 1, 'SPECIFY DESIGN TABLE FOR DIFFERENTIAL ANALYSIS' }
+    if (params.revel_conditions) { ch_revel_conditions = params.revel_conditions } else { exit 1, 'SPECIFY revel conditions comma separated'}
+
     // Check input path parameters to see if they exist
-    checkPathParamList = [params.fetch_folder, params.star_index,params.clean_folder]
+    checkPathParamList = [  params.fetch_folder,
+                            params.bwamem2_index,
+                            params.clean_folder,
+                            params.map_folder,
+                            params.draw_folder,
+                            params.count_folder
+                            ]
     for (param in checkPathParamList) { if (param) { file(param, checkIfExists: true) } }
 
     ch_fetch_folder = Channel.empty()
     ch_star_index = Channel.empty()
 
+    // 1) FETCH
     if (!params.fetch_folder) {
         // SQuIRE FETCH files from golden path
         FETCH( ch_build )
@@ -56,6 +67,7 @@ workflow {
         ch_fetch_folder = params.fetch_folder
     }
 
+    // 2) INDEX
     if (!params.star_index) {
         // // Index with STAR
         STAR_INDEX( ch_build,
@@ -65,7 +77,7 @@ workflow {
         ch_star_index = params.star_index
     }
 
-
+    // 3) SQuIRE Clean
     ch_clean_folder = Channel.empty()
     if (!params.clean_folder ) {
         // // SQuIRE Clean
@@ -76,18 +88,35 @@ workflow {
         ch_clean_folder = params.clean_folder
     }
 
-    // // SQuIRE Map
-    MAP(    ch_fetch_folder,
+    // 4) SQuIRE Map
+    ch_mapped_bam = Channel.empty()
+    if (!params.map_folder ) {
+
+        // // SQuIRE Map
+        MAP(    ch_fetch_folder,
             ch_star_index,
             ch_read_length,
             ch_trim3,
             ch_fastq_file_path
             )
 
-    ch_mapped_bam = MAP.out.mapped_bam
+        ch_mapped_bam = MAP.out.mapped_bam
     
-    // Squire Count
-    COUNT(
+    } else {
+        // Assemble :
+        mapped_path = params.map_folder + "/mapped_*"
+        ch_mapped_bam = Channel
+                            .fromPath(mapped_path,type: 'dir',checkIfExists: true)
+                            .map(file -> tuple(file.baseName.replace("mapped_",""),file))
+
+    }
+
+    // 5) SQuIRE Count
+    ch_squire_count = Channel.empty()
+    if (!params.count_folder ) {
+
+        // // SQuIRE COUNT
+        COUNT(
             ch_mapped_bam,
             ch_clean_folder,
             ch_fetch_folder,
@@ -95,36 +124,58 @@ workflow {
             ch_build,
             ch_strandedness,
             ch_em
-    )
+        )
 
-    // Squire Draw - generate BigWig and BedGraph
-    DRAW(
-            ch_mapped_bam,
-            ch_fetch_folder,
-            ch_build,
-            ch_strandedness
-    )
-
-    // There are three sets of files to combine:
-    // _subFcounts.txt
-    // _TEcounts.txt
-    // _refGenecounts.txt
-
-    // Run with Rscript in bin - collect the individual files given a list of path - samples IDs are in .../squire_count_*/
-    // append column wide per sample - In input only the path of the counts.
-
+        ch_squire_count = COUNT.out.squire_count
+        
     
-    COUNT.out.squire_count
-            .collect{it[1]}
-            .set { ch_count_all_path }
+    } else {
+        // Assemble :
+        count_path = params.count_folder + "/squire_count_*"
+        ch_squire_count = Channel
+                            .fromPath(count_path,type: 'dir',checkIfExists: true)
+                            .map(file -> tuple(file.baseName.replace("squire_count_",""),file))
 
-    NORMDEG (
+    }
 
-        ch_count_all_path
 
+    // 6) SQuIRE DRAW
+    ch_squire_draw = Channel.empty()
+    if (!params.count_folder ) {
+
+        // // SQuIRE DRAW
+        DRAW(
+                ch_mapped_bam,
+                ch_fetch_folder,
+                ch_build,
+                ch_strandedness
+        )
+
+        ch_squire_draw = DRAW.out.squire_draw
+    
+    } else {
+        // Assemble :
+        // tuple val(sample_id), path(mapped_bam) 
+        draw_path = params.draw_folder + "/squire_draw_*"
+        ch_squire_draw = Channel
+                            .fromPath(draw_path,type: 'dir',checkIfExists: true)
+                            .map(file -> tuple(file.baseName.replace("squire_draw_",""),file))
+
+    }
+
+    // 7) Normalize data:
+    // need to get the parent directory of the count folder make a single channel from a single path
+    ch_count_path = ch_squire_count
+                .flatMap{it[1].getParent()}
+                .unique()
+                .collect()
+
+    NORMDEG(
+        ch_count_path,
+        ch_rm_samp,
+        ch_deg_design,
+        ch_revel_conditions
     )
-
-
 }
 
 // Use the Fetch 
@@ -321,7 +372,6 @@ process COUNT {
     
 }
 
-
 process DRAW {
     
     label 'process_high'
@@ -360,18 +410,18 @@ process DRAW {
 
 process NORMDEG {
     
-    label 'process_high'
-    container 'docker://lizatym/squire'
+    label 'process_high_ram'
+    container 'docker://fgualdr/envrnorm'
     echo true
 
     input:
     path ch_count_all_path
-    val build
-    val strandedness
-
+    val ch_rm_samp
+    val ch_deg_design
+    val revel_conditions
 
     output:
-    tuple val(sample_id), path('squire_draw_*')     , emit: squire_draw
+    path('squire_normdeg')     , emit: squire_normdeg
 
     when:
     task.ext.when == null || task.ext.when
@@ -379,14 +429,13 @@ process NORMDEG {
     script:
     def args = task.ext.args ?: ''
     """
-    mkdir squire_draw_${sample_id}
-    squire Draw \\
-            -f ${fetch_folder} \\
-            -m ./${mapped_bam} \\
-            -o ./squire_draw_${sample_id} \\
-            -n ${sample_id} \\
-            -s ${strandedness} \\
-            -b ${build} \\
+    mkdir squire_normdeg
+    Rscript ${workflow.projectDir}/bin/Norm_DEG.R \\
+            -f ${ch_count_all_path} \\
+            -o squire_normdeg \\
+            -r ${ch_rm_samp} \\
+            -d ${ch_deg_design} \\
+            -c ${revel_conditions} \\
             -p ${task.cpus} 
     """
     
